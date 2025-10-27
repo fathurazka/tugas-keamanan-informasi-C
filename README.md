@@ -5,7 +5,7 @@
 | Nama | NRP |
 |------|-----|
 | Muhammad Danis Hadriansyah | 5025221239 |
-| Fathurazka Gamma Syuhada | 5025231128 |
+| Fathurazka Gamma Syuhada | 5025221128 |
 
 Program ini terdiri dari dua komponen utama:
 1. **HTTP Server** (`http_server.py`) - Server chat room yang mengelola komunikasi
