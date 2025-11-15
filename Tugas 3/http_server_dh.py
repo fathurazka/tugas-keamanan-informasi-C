@@ -138,7 +138,11 @@ def permute(block, table):
     return ''.join(block[i - 1] for i in table)
 
 def string_to_binary(text):
-    return ''.join(format(ord(c), '08b') for c in text)
+    """Convert string atau bytes ke binary representation"""
+    if isinstance(text, bytes):
+        return ''.join(format(byte, '08b') for byte in text)
+    else:
+        return ''.join(format(ord(c), '08b') for c in text)
 
 def binary_to_string(binary):
     return ''.join(chr(int(binary[i:i+8], 2)) for i in range(0, len(binary), 8))
@@ -150,7 +154,13 @@ def xor(a, b):
     return ''.join('1' if x != y else '0' for x, y in zip(a, b))
 
 def generate_subkeys(key):
-    key_bin = string_to_binary(key.decode())
+    """Generate 16 subkeys untuk DES dari key (bytes atau string)"""
+    # Jika key adalah bytes, langsung convert ke binary
+    if isinstance(key, bytes):
+        key_bin = string_to_binary(key)
+    else:
+        # Jika string, decode dulu
+        key_bin = string_to_binary(key.decode())
     key_pc1 = permute(key_bin, PC1)
     c = key_pc1[:28]
     d = key_pc1[28:]
@@ -205,11 +215,11 @@ def encrypt_message(message, key):
         encrypted_block = des_encrypt_block(block_bin, subkeys)
         encrypted_blocks.append(binary_to_string(encrypted_block))
     encrypted_message = ''.join(encrypted_blocks)
-    return base64.b64encode(encrypted_message.encode('utf-8')).decode('utf-8')
+    return base64.b64encode(encrypted_message.encode('latin-1')).decode('utf-8')
 
 def decrypt_message(encrypted_message, key):
     subkeys = generate_subkeys(key)
-    encrypted_binary = base64.b64decode(encrypted_message).decode('utf-8')
+    encrypted_binary = base64.b64decode(encrypted_message).decode('latin-1')
     decrypted_blocks = []
     for i in range(0, len(encrypted_binary), 8):
         block = encrypted_binary[i:i+8]
