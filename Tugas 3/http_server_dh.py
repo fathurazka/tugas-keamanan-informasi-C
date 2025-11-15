@@ -281,30 +281,43 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                 encrypted_msg = data['message']
                 client_name = data.get('client_name', 'Unknown')
                 
-                # Decrypt untuk logging di server (opsional)
+                # Decrypt pesan dari sender menggunakan key nya
                 if client_name in client_shared_secrets:
                     try:
-                        des_key = client_shared_secrets[client_name]
-                        decrypted = decrypt_message(encrypted_msg, des_key)
-                        print(f"\n[CHAT] {client_name}: {decrypted}")
-                    except:
-                        print(f"\n[CHAT] {client_name}: <encrypted message>")
+                        sender_key = client_shared_secrets[client_name]
+                        plaintext = decrypt_message(encrypted_msg, sender_key)
+                        print(f"\n[CHAT] {client_name}: {plaintext}")
+                        
+                        # Re-encrypt untuk setiap recipient dengan key mereka masing-masing
+                        for recipient_name, recipient_key in client_shared_secrets.items():
+                            if recipient_name != client_name:
+                                re_encrypted = encrypt_message(plaintext, recipient_key)
+                                message_data = {
+                                    'message': re_encrypted,
+                                    'sender': client_name,
+                                    'recipient': recipient_name,
+                                    'timestamp': time.time()
+                                }
+                                recent_messages.append(message_data)
+                        
+                    except Exception as e:
+                        print(f"\n[ERROR] Gagal memproses pesan dari {client_name}: {e}")
+                else:
+                    print(f"\n[CHAT] {client_name}: <no key established>")
                 
-                message_data = {
-                    'message': encrypted_msg,
-                    'sender': client_name,
-                    'timestamp': time.time()
-                }
-                recent_messages.append(message_data)
-                
-                if len(recent_messages) > 50:
-                    recent_messages.pop(0)
+                if len(recent_messages) > 100:
+                    # Hapus pesan lama, keep last 100
+                    recent_messages[:] = recent_messages[-100:]
                 
                 response = {'status': 'sent'}
                 
             elif action == 'get_messages':
                 client_name = data.get('client_name', '')
-                messages = [msg for msg in recent_messages if msg['sender'] != client_name]
+                
+                # Filter pesan yang ditujukan untuk client ini
+                messages = [msg for msg in recent_messages 
+                           if msg.get('recipient') == client_name and msg['sender'] != client_name]
+                
                 response = {
                     'status': 'success',
                     'messages': messages
