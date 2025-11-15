@@ -122,7 +122,7 @@ def derive_des_key(shared_secret):
     hash_digest = hashlib.sha256(secret_bytes).digest()
     return hash_digest[:8]  # Ambil 8 byte pertama untuk DES key
 
-def perform_key_exchange(server_url, my_name):
+def perform_key_exchange(server_url, my_name, use_persistent_key=False):
     """Melakukan Diffie-Hellman key exchange dengan server"""
     global SHARED_DES_KEY
     
@@ -150,11 +150,27 @@ def perform_key_exchange(server_url, my_name):
         print(f"    ✓ DH Prime (p): {str(dh_prime)[:50]}...")
         print(f"    ✓ DH Generator (g): {dh_generator}")
         
-        # 2. Generate private key client (random)
+        # 2. Generate atau load private key client
         print("\n[2] Generate private key client...")
-        # Gunakan secrets untuk cryptographic random number
-        client_private_key = secrets.randbelow(dh_prime - 2) + 1
-        print(f"    ✓ Client Private Key: {str(client_private_key)[:50]}... (RAHASIA)")
+        
+        if use_persistent_key:
+            # Coba load dari file
+            import os
+            key_file = f'.client_{my_name}_private_key.txt'
+            if os.path.exists(key_file):
+                with open(key_file, 'r') as f:
+                    client_private_key = int(f.read().strip())
+                print(f"    ✓ Client Private Key loaded dari file (PERSISTENT)")
+            else:
+                # Generate baru dan simpan
+                client_private_key = secrets.randbelow(dh_prime - 2) + 1
+                with open(key_file, 'w') as f:
+                    f.write(str(client_private_key))
+                print(f"    ✓ Client Private Key: {str(client_private_key)[:50]}... (BARU, disimpan)")
+        else:
+            # Generate baru setiap session (default)
+            client_private_key = secrets.randbelow(dh_prime - 2) + 1
+            print(f"    ✓ Client Private Key: {str(client_private_key)[:50]}... (RAHASIA)")
         
         # 3. Hitung public key client: g^a mod p
         print("\n[3] Menghitung public key client...")
@@ -201,6 +217,17 @@ def perform_key_exchange(server_url, my_name):
         print(f"  - Bytes       : {' '.join(f'{b:02x}' for b in SHARED_DES_KEY)}")
         print(f"  - Decimal     : {', '.join(str(b) for b in SHARED_DES_KEY)}")
         print(f"  - Length      : {len(SHARED_DES_KEY)} bytes = {len(SHARED_DES_KEY)*8} bits")
+        
+        if use_persistent_key:
+            print("\n⚠️  PERSISTENT KEY MODE AKTIF")
+            print(f"   Private key disimpan di: .client_{my_name}_private_key.txt")
+            print(f"   Anda akan punya DES key yang sama setiap login")
+        else:
+            print("\n⚠️  EPHEMERAL KEY MODE AKTIF (Default)")
+            print(f"   Private key TIDAK disimpan")
+            print(f"   Setiap login = DES key baru")
+            print(f"   Pesan lama akan tidak terbaca setelah re-login")
+        
         print("=" * 70 + "\n")
         
         return True
@@ -382,7 +409,22 @@ def main():
         return
     
     # Perform Diffie-Hellman key exchange
-    if not perform_key_exchange(server_url, my_name):
+    print("\n" + "=" * 70)
+    print("PILIH MODE KEY EXCHANGE:")
+    print("=" * 70)
+    print("1. EPHEMERAL (Default) - Key baru setiap login")
+    print("   ✓ Lebih aman (Perfect Forward Secrecy)")
+    print("   ✗ Pesan lama tidak terbaca setelah re-login")
+    print()
+    print("2. PERSISTENT - Key sama setiap login (disimpan di file)")
+    print("   ✓ Pesan lama tetap bisa dibaca")
+    print("   ✗ Jika file private key dicuri = semua pesan bisa dibaca")
+    print("=" * 70)
+    
+    mode = input("Pilih mode (1/2) [default: 1]: ").strip()
+    use_persistent = (mode == "2")
+    
+    if not perform_key_exchange(server_url, my_name, use_persistent):
         print("✗ Key exchange gagal. Keluar dari program.")
         return
     

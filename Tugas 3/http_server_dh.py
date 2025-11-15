@@ -342,12 +342,25 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                     try:
                         client_num = int(client_name.split('_')[1])
                         active_clients.discard(client_num)
+                        
+                        # Hapus key dari storage
                         if client_name in client_shared_secrets:
                             del client_shared_secrets[client_name]
+                        
+                        # PENTING: Hapus pesan yang ditujukan atau dikirim oleh client ini
+                        # Karena key sudah hilang, pesan tidak bisa didekripsi lagi
+                        recent_messages[:] = [
+                            msg for msg in recent_messages 
+                            if msg['sender'] != client_name and msg.get('recipient') != client_name
+                        ]
+                        
+                        print(f"\n[QUIT] {client_name} keluar dari chat room")
+                        print(f"       - Key dihapus")
+                        print(f"       - Pesan terkait dihapus")
+                        
                     except ValueError:
                         pass
                 response = {'status': 'quit'}
-                print(f"\n[QUIT] {client_name} keluar dari chat room")
                 
             else:
                 response = {'status': 'connected'}
