@@ -5,8 +5,9 @@ import threading
 import base64
 import hashlib
 import secrets
+import os
 
-# DES Tables (sama seperti sebelumnya)
+# DES Tables
 IP = [58, 50, 42, 34, 26, 18, 10, 2,
       60, 52, 44, 36, 28, 20, 12, 4,
       62, 54, 46, 38, 30, 22, 14, 6,
@@ -101,12 +102,10 @@ PC2 = [14, 17, 11, 24, 1, 5,
 
 SHIFT = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
 
-# Global variable untuk menyimpan shared key setelah key exchange
 SHARED_DES_KEY = None
 
-# ==================== DIFFIE-HELLMAN IMPLEMENTATION ====================
+# ==================== DIFFIE-HELLMAN ====================
 def mod_exp(base, exp, mod):
-    """Modular exponentiation: (base^exp) % mod - konvensional"""
     result = 1
     base = base % mod
     while exp > 0:
@@ -117,28 +116,23 @@ def mod_exp(base, exp, mod):
     return result
 
 def derive_des_key(shared_secret):
-    """Convert shared secret ke 8-byte DES key menggunakan SHA-256"""
     secret_bytes = str(shared_secret).encode('utf-8')
     hash_digest = hashlib.sha256(secret_bytes).digest()
-    return hash_digest[:8]  # Ambil 8 byte pertama untuk DES key
+    return hash_digest[:8]
 
-def perform_key_exchange(server_url, my_name, use_persistent_key=False):
-    """Melakukan Diffie-Hellman key exchange dengan server"""
+def perform_key_exchange(server_url, my_name):
     global SHARED_DES_KEY
     
-    print("\n" + "=" * 70)
-    print("DIFFIE-HELLMAN KEY EXCHANGE")
-    print("=" * 70)
+    print("\n=== DIFFIE-HELLMAN KEY EXCHANGE ===")
     
     try:
-        # 1. Minta public key dari server
-        print("[1] Meminta parameter DH dari server...")
+        # Get DH parameters from server
         response = requests.post(server_url, 
             json={'action': 'get_server_public_key'}, 
             timeout=10)
         
         if response.status_code != 200:
-            print("Gagal mendapatkan server public key")
+            print("❌ Gagal mendapat server public key")
             return False
         
         data = response.json()
@@ -146,39 +140,24 @@ def perform_key_exchange(server_url, my_name, use_persistent_key=False):
         dh_prime = int(data['dh_prime'])
         dh_generator = int(data['dh_generator'])
         
-        print(f"    ✓ Server Public Key: {str(server_public_key)[:50]}...")
-        print(f"    ✓ DH Prime (p): {str(dh_prime)[:50]}...")
-        print(f"    ✓ DH Generator (g): {dh_generator}")
+        print("✓ Menerima parameter DH dari server")
         
-        # 2. Generate atau load private key client
-        print("\n[2] Generate private key client...")
-        
-        if use_persistent_key:
-            # Coba load dari file
-            import os
-            key_file = f'.client_{my_name}_private_key.txt'
-            if os.path.exists(key_file):
-                with open(key_file, 'r') as f:
-                    client_private_key = int(f.read().strip())
-                print(f"    ✓ Client Private Key loaded dari file (PERSISTENT)")
-            else:
-                # Generate baru dan simpan
-                client_private_key = secrets.randbelow(dh_prime - 2) + 1
-                with open(key_file, 'w') as f:
-                    f.write(str(client_private_key))
-                print(f"    ✓ Client Private Key: {str(client_private_key)[:50]}... (BARU, disimpan)")
+        # Load or generate private key
+        key_file = f'.client_{my_name}_private_key.txt'
+        if os.path.exists(key_file):
+            with open(key_file, 'r') as f:
+                client_private_key = int(f.read().strip())
+            print(f"✓ Load private key dari file (persistent)")
         else:
-            # Generate baru setiap session (default)
             client_private_key = secrets.randbelow(dh_prime - 2) + 1
-            print(f"    ✓ Client Private Key: {str(client_private_key)[:50]}... (RAHASIA)")
+            with open(key_file, 'w') as f:
+                f.write(str(client_private_key))
+            print(f"✓ Generate private key baru (disimpan)")
         
-        # 3. Hitung public key client: g^a mod p
-        print("\n[3] Menghitung public key client...")
+        # Calculate public key
         client_public_key = mod_exp(dh_generator, client_private_key, dh_prime)
-        print(f"    ✓ Client Public Key: {str(client_public_key)[:50]}...")
         
-        # 4. Kirim public key client ke server
-        print("\n[4] Mengirim public key ke server...")
+        # Send public key to server
         response = requests.post(server_url,
             json={
                 'action': 'exchange_key',
@@ -188,52 +167,23 @@ def perform_key_exchange(server_url, my_name, use_persistent_key=False):
             timeout=10)
         
         if response.status_code != 200:
-            print("Gagal mengirim public key")
+            print("❌ Gagal mengirim public key")
             return False
         
-        print("    ✓ Public key terkirim ke server")
+        print("✓ Key exchange dengan server berhasil")
         
-        # 5. Hitung shared secret: (server_public_key^client_private_key) mod prime
-        print("\n[5] Menghitung shared secret...")
+        # Calculate shared secret
         shared_secret = mod_exp(server_public_key, client_private_key, dh_prime)
-        print(f"    ✓ Shared Secret: {str(shared_secret)[:50]}...")
         
-        # 6. Derive DES key dari shared secret
-        print("\n[6] Membuat DES key dari shared secret...")
+        # Derive DES key
         SHARED_DES_KEY = derive_des_key(shared_secret)
-        print(f"    ✓ DES Key (8 bytes): {SHARED_DES_KEY.hex()}")
-        
-        print("\n" + "=" * 70)
-        print("KEY EXCHANGE BERHASIL!")
-        print("=" * 70)
-        print(f"Client Private Key  : {str(client_private_key)[:30]}... (RAHASIA)")
-        print(f"Client Public Key   : {str(client_public_key)[:30]}...")
-        print(f"Server Public Key   : {str(server_public_key)[:30]}...")
-        print(f"Shared Secret Hash  : {hashlib.sha256(str(shared_secret).encode()).hexdigest()[:32]}...")
-        print(f"DES Key (8 bytes)   : {SHARED_DES_KEY.hex()}")
-        print("=" * 70)
-        print("Penjelasan DES Key:")
-        print(f"  - Hexadecimal : {SHARED_DES_KEY.hex()}")
-        print(f"  - Bytes       : {' '.join(f'{b:02x}' for b in SHARED_DES_KEY)}")
-        print(f"  - Decimal     : {', '.join(str(b) for b in SHARED_DES_KEY)}")
-        print(f"  - Length      : {len(SHARED_DES_KEY)} bytes = {len(SHARED_DES_KEY)*8} bits")
-        
-        if use_persistent_key:
-            print("\n⚠️  PERSISTENT KEY MODE AKTIF")
-            print(f"   Private key disimpan di: .client_{my_name}_private_key.txt")
-            print(f"   Anda akan punya DES key yang sama setiap login")
-        else:
-            print("\n⚠️  EPHEMERAL KEY MODE AKTIF (Default)")
-            print(f"   Private key TIDAK disimpan")
-            print(f"   Setiap login = DES key baru")
-            print(f"   Pesan lama akan tidak terbaca setelah re-login")
-        
-        print("=" * 70 + "\n")
+        print(f"✓ DES Key: {SHARED_DES_KEY.hex()}")
+        print("="*40 + "\n")
         
         return True
         
     except Exception as e:
-        print(f"Error during key exchange: {e}")
+        print(f"❌ Error: {e}")
         return False
 
 # ==================== DES FUNCTIONS ====================
@@ -241,7 +191,6 @@ def permute(block, table):
     return ''.join(block[i - 1] for i in table)
 
 def string_to_binary(text):
-    """Convert string atau bytes ke binary representation"""
     if isinstance(text, bytes):
         return ''.join(format(byte, '08b') for byte in text)
     else:
@@ -257,12 +206,9 @@ def xor(a, b):
     return ''.join('1' if x != y else '0' for x, y in zip(a, b))
 
 def generate_subkeys(key):
-    """Generate 16 subkeys untuk DES dari key (bytes atau string)"""
-    # Jika key adalah bytes, langsung convert ke binary
     if isinstance(key, bytes):
         key_bin = string_to_binary(key)
     else:
-        # Jika string, decode dulu
         key_bin = string_to_binary(key.decode())
     key_pc1 = permute(key_bin, PC1)
     c = key_pc1[:28]
@@ -318,15 +264,7 @@ def encrypt_message(message):
         encrypted_block = des_encrypt_block(block_bin, subkeys)
         encrypted_blocks.append(binary_to_string(encrypted_block))
     encrypted_message = ''.join(encrypted_blocks)
-    encrypted_base64 = base64.b64encode(encrypted_message.encode('latin-1')).decode('utf-8')
-    
-    print(f"\n[ENKRIPSI]")
-    print(f"  Plaintext : {message}")
-    print(f"  DES Key   : {SHARED_DES_KEY.hex()}")
-    print(f"  Encrypted : {encrypted_base64[:50]}...")
-    print("-" * 70)
-    
-    return encrypted_base64
+    return base64.b64encode(encrypted_message.encode('latin-1')).decode('utf-8')
 
 def decrypt_message(encrypted_message):
     subkeys = generate_subkeys(SHARED_DES_KEY)
@@ -338,18 +276,9 @@ def decrypt_message(encrypted_message):
         decrypted_block = des_decrypt_block(block_bin, subkeys)
         decrypted_blocks.append(binary_to_string(decrypted_block))
     decrypted_message = ''.join(decrypted_blocks)
-    original_message = decrypted_message.rstrip('\x00')
-    
-    print(f"\n[DEKRIPSI]")
-    print(f"  Encrypted : {encrypted_message[:50]}...")
-    print(f"  DES Key   : {SHARED_DES_KEY.hex()}")
-    print(f"  Plaintext : {original_message}")
-    print("-" * 70)
-    
-    return original_message
+    return decrypted_message.rstrip('\x00')
 
 def listen_for_messages(server_url, my_name):
-    """Thread untuk mendengarkan pesan dari client lain"""
     last_message_count = 0
     
     while True:
@@ -368,9 +297,12 @@ def listen_for_messages(server_url, my_name):
                     for msg in new_messages:
                         sender = msg['sender']
                         encrypted_msg = msg['message']
-                        decrypted_msg = decrypt_message(encrypted_msg)
-                        print(f"\n💬 {sender}: {decrypted_msg}")
-                        print("Ketik pesan Anda: ", end="", flush=True)
+                        try:
+                            decrypted_msg = decrypt_message(encrypted_msg)
+                            print(f"\n💬 {sender}: {decrypted_msg}")
+                        except:
+                            print(f"\n💬 {sender}: [dekripsi gagal]")
+                        print(">>> ", end="", flush=True)
                     
                     last_message_count = len(data['messages'])
             
@@ -384,15 +316,13 @@ def listen_for_messages(server_url, my_name):
 def main():
     global SHARED_DES_KEY
     
-    print("=" * 70)
-    print("SECURE CHAT CLIENT WITH DIFFIE-HELLMAN KEY EXCHANGE")
-    print("=" * 70)
+    print("="*40)
+    print("SECURE CHAT CLIENT (Diffie-Hellman + DES)")
+    print("="*40)
     
-    server_url = input("Masukkan URL server LocalTunnel: ")
+    server_url = input("Server URL: ")
     if not server_url.startswith('http'):
         server_url = 'https://' + server_url
-    
-    print(f"\nMenghubungi server: {server_url}")
     
     # Join chat room
     try:
@@ -402,68 +332,37 @@ def main():
             my_name = data['client_name']
             print(f"✓ Bergabung sebagai: {my_name}")
         else:
-            print("✗ Tidak bisa join chat room")
+            print("❌ Tidak bisa join")
             return
     except:
-        print("✗ Tidak bisa terhubung ke server")
+        print("❌ Tidak bisa terhubung ke server")
         return
     
-    # Perform Diffie-Hellman key exchange
-    print("\n" + "=" * 70)
-    print("PILIH MODE KEY EXCHANGE:")
-    print("=" * 70)
-    print("1. EPHEMERAL (Default) - Key baru setiap login")
-    print("   ✓ Lebih aman (Perfect Forward Secrecy)")
-    print("   ✗ Pesan lama tidak terbaca setelah re-login")
-    print()
-    print("2. PERSISTENT - Key sama setiap login (disimpan di file)")
-    print("   ✓ Pesan lama tetap bisa dibaca")
-    print("   ✗ Jika file private key dicuri = semua pesan bisa dibaca")
-    print("=" * 70)
-    
-    mode = input("Pilih mode (1/2) [default: 1]: ").strip()
-    use_persistent = (mode == "2")
-    
-    if not perform_key_exchange(server_url, my_name, use_persistent):
-        print("✗ Key exchange gagal. Keluar dari program.")
+    # Perform key exchange
+    if not perform_key_exchange(server_url, my_name):
+        print("❌ Key exchange gagal")
         return
     
     # Start listening thread
     listen_thread = threading.Thread(target=listen_for_messages, args=(server_url, my_name), daemon=True)
     listen_thread.start()
     
-    print("\n" + "=" * 70)
-    print("CHAT ROOM AKTIF - Komunikasi Terenkripsi DES")
-    print("=" * 70)
-    print("Ketik pesan Anda dan tekan Enter untuk mengirim")
-    print("Ketik 'quit' untuk keluar")
-    print("=" * 70 + "\n")
+    print("Chat aktif! Ketik 'quit' untuk keluar\n")
     
     try:
         while True:
-            message = input("Ketik pesan Anda: ")
+            message = input(">>> ")
+            
             if message.lower() == 'quit':
-                try:
-                    response = requests.post(server_url,
-                        json={
-                            'action': 'quit',
-                            'client_name': my_name
-                        },
-                        timeout=10)
-                    if response.status_code == 200:
-                        print(f"\n{my_name} keluar dari chat!")
-                    else:
-                        print("Gagal mengirim sinyal quit")
-                except:
-                    print("Gagal mengirim sinyal quit")
+                requests.post(server_url, json={'action': 'quit', 'client_name': my_name}, timeout=5)
+                print(f"✓ {my_name} keluar dari chat")
                 break
             
             if not message.strip():
                 continue
             
-            encrypted_message = encrypt_message(message)
-            
             try:
+                encrypted_message = encrypt_message(message)
                 response = requests.post(server_url, 
                     json={
                         'action': 'send_message',
@@ -472,25 +371,15 @@ def main():
                     }, 
                     timeout=10)
                 
-                if response.status_code == 200:
-                    print(f"✓ Pesan terkirim dari {my_name}!")
-                else:
-                    print("✗ Gagal mengirim pesan")
+                if response.status_code != 200:
+                    print("❌ Gagal mengirim")
                     
-            except requests.RequestException as e:
-                print(f"Error: {e}")
+            except Exception as e:
+                print(f"❌ Error: {e}")
                 
     except KeyboardInterrupt:
-        try:
-            response = requests.post(server_url,
-                json={
-                    'action': 'quit',
-                    'client_name': my_name
-                },
-                timeout=10)
-        except:
-            pass
-        print(f"\n{my_name} keluar dari chat!")
+        requests.post(server_url, json={'action': 'quit', 'client_name': my_name}, timeout=5)
+        print(f"\n✓ {my_name} keluar")
 
 if __name__ == "__main__":
     main()

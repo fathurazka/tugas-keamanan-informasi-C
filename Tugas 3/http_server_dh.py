@@ -1,13 +1,11 @@
 import http.server
 import socketserver
 import json
-import threading
-import queue
 import time
 import base64
 import hashlib
 
-# DES Tables (sama seperti sebelumnya)
+# DES Tables
 IP = [58, 50, 42, 34, 26, 18, 10, 2,
       60, 52, 44, 36, 28, 20, 12, 4,
       62, 54, 46, 38, 30, 22, 14, 6,
@@ -102,43 +100,25 @@ PC2 = [14, 17, 11, 24, 1, 5,
 
 SHIFT = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
 
-# ==================== DIFFIE-HELLMAN IMPLEMENTATION ====================
-# Parameter publik Diffie-Hellman (bilangan prima besar dan generator)
+# ==================== DIFFIE-HELLMAN ====================
 DH_PRIME = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
 DH_GENERATOR = 2
 
-# Private key server (rahasia)
-server_private_key = 123456789012345  # Dalam implementasi nyata, gunakan random number
+server_private_key = 123456789012345
+server_public_key = pow(DH_GENERATOR, server_private_key, DH_PRIME)
 
-# Public key server (dihitung dari private key)
-def mod_exp(base, exp, mod):
-    """Modular exponentiation: (base^exp) % mod"""
-    result = 1
-    base = base % mod
-    while exp > 0:
-        if exp % 2 == 1:
-            result = (result * base) % mod
-        exp = exp >> 1
-        base = (base * base) % mod
-    return result
-
-server_public_key = mod_exp(DH_GENERATOR, server_private_key, DH_PRIME)
-
-# Storage untuk shared secrets setiap client
 client_shared_secrets = {}
 
 def derive_des_key(shared_secret):
-    """Convert shared secret ke 8-byte DES key menggunakan SHA-256"""
     secret_bytes = str(shared_secret).encode('utf-8')
     hash_digest = hashlib.sha256(secret_bytes).digest()
-    return hash_digest[:8]  # Ambil 8 byte pertama untuk DES key
+    return hash_digest[:8]
 
 # ==================== DES FUNCTIONS ====================
 def permute(block, table):
     return ''.join(block[i - 1] for i in table)
 
 def string_to_binary(text):
-    """Convert string atau bytes ke binary representation"""
     if isinstance(text, bytes):
         return ''.join(format(byte, '08b') for byte in text)
     else:
@@ -154,12 +134,9 @@ def xor(a, b):
     return ''.join('1' if x != y else '0' for x, y in zip(a, b))
 
 def generate_subkeys(key):
-    """Generate 16 subkeys untuk DES dari key (bytes atau string)"""
-    # Jika key adalah bytes, langsung convert ke binary
     if isinstance(key, bytes):
         key_bin = string_to_binary(key)
     else:
-        # Jika string, decode dulu
         key_bin = string_to_binary(key.decode())
     key_pc1 = permute(key_bin, PC1)
     c = key_pc1[:28]
@@ -230,7 +207,6 @@ def decrypt_message(encrypted_message, key):
     return decrypted_message.rstrip('\x00')
 
 # ==================== CHAT ROOM ====================
-chat_room = queue.Queue()
 active_clients = set()
 recent_messages = []
 
@@ -243,52 +219,57 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
             data = json.loads(post_data)
             action = data.get('action')
             
-            # ==================== DIFFIE-HELLMAN KEY EXCHANGE ====================
             if action == 'get_server_public_key':
-                # Client meminta public key server
                 response = {
                     'status': 'success',
                     'server_public_key': str(server_public_key),
                     'dh_prime': str(DH_PRIME),
                     'dh_generator': str(DH_GENERATOR)
                 }
-                print(f"\n[DH] Server mengirim public key ke client")
                 
             elif action == 'exchange_key':
-                # Client mengirim public key-nya, server hitung shared secret
                 client_name = data.get('client_name', 'Unknown')
                 client_public_key = int(data.get('client_public_key'))
                 
-                # Hitung shared secret: (client_public_key ^ server_private_key) mod prime
-                shared_secret = mod_exp(client_public_key, server_private_key, DH_PRIME)
-                
-                # Derive DES key dari shared secret
+                shared_secret = pow(client_public_key, server_private_key, DH_PRIME)
                 des_key = derive_des_key(shared_secret)
                 client_shared_secrets[client_name] = des_key
                 
-                print(f"\n[DH] Key exchange dengan {client_name}")
-                print(f"     Client Public Key: {client_public_key}")
-                print(f"     Shared Secret (hash): {hashlib.sha256(str(shared_secret).encode()).hexdigest()[:16]}...")
-                print(f"     DES Key: {des_key.hex()}")
+                print(f"[KEY] {client_name}: {des_key.hex()}")
                 
-                response = {
-                    'status': 'success',
-                    'message': 'Key exchange completed'
-                }
+                # FIX BUG: Re-encrypt pending messages for rejoining client
+                if recent_messages:
+                    updated_messages = []
+                    for msg in recent_messages:
+                        if msg.get('recipient') == client_name:
+                            # Re-encrypt message untuk client yang baru rejoin
+                            try:
+                                # Decrypt dengan key lama (dari sender)
+                                sender_key = client_shared_secrets.get(msg['sender'])
+                                if sender_key:
+                                    plaintext = decrypt_message(msg['message'], sender_key)
+                                    # Re-encrypt dengan key baru client
+                                    re_encrypted = encrypt_message(plaintext, des_key)
+                                    msg['message'] = re_encrypted
+                                    print(f"[RE-ENCRYPT] Pesan untuk {client_name} di-update")
+                            except:
+                                pass
+                        updated_messages.append(msg)
+                    recent_messages[:] = updated_messages
+                
+                response = {'status': 'success', 'message': 'Key exchange completed'}
             
-            # ==================== CHAT OPERATIONS ====================
             elif action == 'send_message':
                 encrypted_msg = data['message']
                 client_name = data.get('client_name', 'Unknown')
                 
-                # Decrypt pesan dari sender menggunakan key nya
                 if client_name in client_shared_secrets:
                     try:
                         sender_key = client_shared_secrets[client_name]
                         plaintext = decrypt_message(encrypted_msg, sender_key)
-                        print(f"\n[CHAT] {client_name}: {plaintext}")
+                        print(f"[CHAT] {client_name}: {plaintext}")
                         
-                        # Re-encrypt untuk setiap recipient dengan key mereka masing-masing
+                        # Re-encrypt untuk setiap recipient
                         for recipient_name, recipient_key in client_shared_secrets.items():
                             if recipient_name != client_name:
                                 re_encrypted = encrypt_message(plaintext, recipient_key)
@@ -301,27 +282,18 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                                 recent_messages.append(message_data)
                         
                     except Exception as e:
-                        print(f"\n[ERROR] Gagal memproses pesan dari {client_name}: {e}")
-                else:
-                    print(f"\n[CHAT] {client_name}: <no key established>")
+                        print(f"[ERROR] {client_name}: {e}")
                 
                 if len(recent_messages) > 100:
-                    # Hapus pesan lama, keep last 100
                     recent_messages[:] = recent_messages[-100:]
                 
                 response = {'status': 'sent'}
                 
             elif action == 'get_messages':
                 client_name = data.get('client_name', '')
-                
-                # Filter pesan yang ditujukan untuk client ini
                 messages = [msg for msg in recent_messages 
                            if msg.get('recipient') == client_name and msg['sender'] != client_name]
-                
-                response = {
-                    'status': 'success',
-                    'messages': messages
-                }
+                response = {'status': 'success', 'messages': messages}
                 
             elif action == 'join':
                 client_num = 1
@@ -329,12 +301,8 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                     client_num += 1
                 active_clients.add(client_num)
                 client_name = f"Client_{client_num}"
-                
-                response = {
-                    'status': 'joined',
-                    'client_name': client_name
-                }
-                print(f"\n[JOIN] {client_name} bergabung ke chat room")
+                print(f"[JOIN] {client_name}")
+                response = {'status': 'joined', 'client_name': client_name}
                 
             elif action == 'quit':
                 client_name = data.get('client_name', '')
@@ -342,22 +310,9 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                     try:
                         client_num = int(client_name.split('_')[1])
                         active_clients.discard(client_num)
-                        
-                        # Hapus key dari storage
                         if client_name in client_shared_secrets:
                             del client_shared_secrets[client_name]
-                        
-                        # PENTING: Hapus pesan yang ditujukan atau dikirim oleh client ini
-                        # Karena key sudah hilang, pesan tidak bisa didekripsi lagi
-                        recent_messages[:] = [
-                            msg for msg in recent_messages 
-                            if msg['sender'] != client_name and msg.get('recipient') != client_name
-                        ]
-                        
-                        print(f"\n[QUIT] {client_name} keluar dari chat room")
-                        print(f"       - Key dihapus")
-                        print(f"       - Pesan terkait dihapus")
-                        
+                        print(f"[QUIT] {client_name}")
                     except ValueError:
                         pass
                 response = {'status': 'quit'}
@@ -378,16 +333,12 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(f"Error: {str(e)}".encode())
 
 PORT = 65432
-print("=" * 70)
-print("HTTP CHAT ROOM SERVER WITH DIFFIE-HELLMAN KEY EXCHANGE")
-print("=" * 70)
-print(f"Server berjalan di port {PORT}")
-print(f"Server Public Key: {str(server_public_key)[:50]}...")
-print(f"DH Prime: {str(DH_PRIME)[:50]}...")
-print(f"DH Generator: {DH_GENERATOR}")
-print("-" * 70)
-print("Menunggu client untuk key exchange dan chat...")
-print("=" * 70)
+print("="*50)
+print("SECURE CHAT SERVER (Diffie-Hellman + DES)")
+print("="*50)
+print(f"Port: {PORT}")
+print(f"Server Public Key: {str(server_public_key)[:40]}...")
+print("="*50)
 
 with socketserver.TCPServer(("0.0.0.0", PORT), ChatHandler) as httpd:
     httpd.serve_forever()
