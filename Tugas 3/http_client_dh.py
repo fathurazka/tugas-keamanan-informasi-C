@@ -132,7 +132,7 @@ def perform_key_exchange(server_url, my_name):
             timeout=10)
         
         if response.status_code != 200:
-            print("❌ Gagal mendapat server public key")
+            print("Gagal mendapat server public key")
             return False
         
         data = response.json()
@@ -140,19 +140,19 @@ def perform_key_exchange(server_url, my_name):
         dh_prime = int(data['dh_prime'])
         dh_generator = int(data['dh_generator'])
         
-        print("✓ Menerima parameter DH dari server")
+        print("Menerima parameter DH dari server")
         
         # Load or generate private key
         key_file = f'.client_{my_name}_private_key.txt'
         if os.path.exists(key_file):
             with open(key_file, 'r') as f:
                 client_private_key = int(f.read().strip())
-            print(f"✓ Load private key dari file (persistent)")
+            print(f"Load private key dari file (persistent)")
         else:
             client_private_key = secrets.randbelow(dh_prime - 2) + 1
             with open(key_file, 'w') as f:
                 f.write(str(client_private_key))
-            print(f"✓ Generate private key baru (disimpan)")
+            print(f"Generate private key baru (disimpan)")
         
         # Calculate public key
         client_public_key = mod_exp(dh_generator, client_private_key, dh_prime)
@@ -167,23 +167,23 @@ def perform_key_exchange(server_url, my_name):
             timeout=10)
         
         if response.status_code != 200:
-            print("❌ Gagal mengirim public key")
+            print("Gagal mengirim public key")
             return False
         
-        print("✓ Key exchange dengan server berhasil")
+        print("Key exchange dengan server berhasil")
         
         # Calculate shared secret
         shared_secret = mod_exp(server_public_key, client_private_key, dh_prime)
         
         # Derive DES key
         SHARED_DES_KEY = derive_des_key(shared_secret)
-        print(f"✓ DES Key: {SHARED_DES_KEY.hex()}")
+        print(f"DES Key: {SHARED_DES_KEY.hex()}")
         print("="*40 + "\n")
         
         return True
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         return False
 
 # ==================== DES FUNCTIONS ====================
@@ -299,9 +299,9 @@ def listen_for_messages(server_url, my_name):
                         encrypted_msg = msg['message']
                         try:
                             decrypted_msg = decrypt_message(encrypted_msg)
-                            print(f"\n💬 {sender}: {decrypted_msg}")
+                            print(f"\n{sender}: {decrypted_msg}")
                         except:
-                            print(f"\n💬 {sender}: [dekripsi gagal]")
+                            print(f"\n{sender}: [dekripsi gagal]")
                         print(">>> ", end="", flush=True)
                     
                     last_message_count = len(data['messages'])
@@ -330,17 +330,17 @@ def main():
         if response.status_code == 200:
             data = response.json()
             my_name = data['client_name']
-            print(f"✓ Bergabung sebagai: {my_name}")
+            print(f"Bergabung sebagai: {my_name}")
         else:
-            print("❌ Tidak bisa join")
+            print("Tidak bisa join")
             return
     except:
-        print("❌ Tidak bisa terhubung ke server")
+        print("Tidak bisa terhubung ke server")
         return
     
     # Perform key exchange
     if not perform_key_exchange(server_url, my_name):
-        print("❌ Key exchange gagal")
+        print("Key exchange gagal")
         return
     
     # Start listening thread
@@ -355,7 +355,7 @@ def main():
             
             if message.lower() == 'quit':
                 requests.post(server_url, json={'action': 'quit', 'client_name': my_name}, timeout=5)
-                print(f"✓ {my_name} keluar dari chat")
+                print(f"{my_name} keluar dari chat")
                 break
             
             if not message.strip():
@@ -371,15 +371,23 @@ def main():
                     }, 
                     timeout=10)
                 
-                if response.status_code != 200:
-                    print("❌ Gagal mengirim")
+                if response.status_code == 200:
+                    result = response.json()
+                    if not result.get('success'):
+                        print(f"Server error: {result.get('message', 'Unknown')}")
+                        print("Mungkin perlu key exchange ulang. Restart client.")
+                elif response.status_code == 400:
+                    print("Gagal mengirim (key mismatch)")
+                    print("Hapus file .client_*_private_key.txt dan restart")
+                else:
+                    print("Gagal mengirim")
                     
             except Exception as e:
-                print(f"❌ Error: {e}")
+                print(f"Error: {e}")
                 
     except KeyboardInterrupt:
         requests.post(server_url, json={'action': 'quit', 'client_name': my_name}, timeout=5)
-        print(f"\n✓ {my_name} keluar")
+        print(f"\n{my_name} keluar")
 
 if __name__ == "__main__":
     main()

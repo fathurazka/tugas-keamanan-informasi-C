@@ -233,29 +233,20 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                 
                 shared_secret = pow(client_public_key, server_private_key, DH_PRIME)
                 des_key = derive_des_key(shared_secret)
-                client_shared_secrets[client_name] = des_key
                 
-                print(f"[KEY] {client_name}: {des_key.hex()}")
+                if client_name in client_shared_secrets:
+                    old_key = client_shared_secrets[client_name]
+                    if old_key == des_key:
+                        print(f"[KEY] {client_name}: rejoin (same key)")
+                    else:
+                        client_shared_secrets[client_name] = des_key
+                        print(f"[KEY] {client_name}: key updated {des_key.hex()}")
+                else:
+                    client_shared_secrets[client_name] = des_key
+                    print(f"[KEY] {client_name}: new key {des_key.hex()}")
                 
-                # FIX BUG: Re-encrypt pending messages for rejoining client
-                if recent_messages:
-                    updated_messages = []
-                    for msg in recent_messages:
-                        if msg.get('recipient') == client_name:
-                            # Re-encrypt message untuk client yang baru rejoin
-                            try:
-                                # Decrypt dengan key lama (dari sender)
-                                sender_key = client_shared_secrets.get(msg['sender'])
-                                if sender_key:
-                                    plaintext = decrypt_message(msg['message'], sender_key)
-                                    # Re-encrypt dengan key baru client
-                                    re_encrypted = encrypt_message(plaintext, des_key)
-                                    msg['message'] = re_encrypted
-                                    print(f"[RE-ENCRYPT] Pesan untuk {client_name} di-update")
-                            except:
-                                pass
-                        updated_messages.append(msg)
-                    recent_messages[:] = updated_messages
+                recent_messages[:] = [msg for msg in recent_messages if msg.get('recipient') != client_name]
+                print(f"[CLEAR] Pesan lama untuk {client_name} dihapus")
                 
                 response = {'status': 'success', 'message': 'Key exchange completed'}
             
@@ -269,7 +260,6 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                         plaintext = decrypt_message(encrypted_msg, sender_key)
                         print(f"[CHAT] {client_name}: {plaintext}")
                         
-                        # Re-encrypt untuk setiap recipient
                         for recipient_name, recipient_key in client_shared_secrets.items():
                             if recipient_name != client_name:
                                 re_encrypted = encrypt_message(plaintext, recipient_key)
@@ -282,7 +272,14 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                                 recent_messages.append(message_data)
                         
                     except Exception as e:
-                        print(f"[ERROR] {client_name}: {e}")
+                        print(f"[ERROR] Decrypt failed for {client_name}: {e}")
+                        response = {'status': 'error', 'message': 'Decryption failed'}
+                        self.send_response(400)
+                        self.send_header('Content-type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps(response).encode())
+                        return
                 
                 if len(recent_messages) > 100:
                     recent_messages[:] = recent_messages[-100:]
@@ -310,9 +307,7 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                     try:
                         client_num = int(client_name.split('_')[1])
                         active_clients.discard(client_num)
-                        if client_name in client_shared_secrets:
-                            del client_shared_secrets[client_name]
-                        print(f"[QUIT] {client_name}")
+                        print(f"[QUIT] {client_name} (key retained for rejoin)")
                     except ValueError:
                         pass
                 response = {'status': 'quit'}
