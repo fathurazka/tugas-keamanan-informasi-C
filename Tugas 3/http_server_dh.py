@@ -284,7 +284,7 @@ class ChatHandler(http.server.SimpleHTTPRequestHandler):
                 if len(recent_messages) > 100:
                     recent_messages[:] = recent_messages[-100:]
                 
-                response = {'status': 'sent'}
+                response = {'status': 'sent', 'success': True}
                 
             elif action == 'get_messages':
                 client_name = data.get('client_name', '')

@@ -129,7 +129,7 @@ def perform_key_exchange(server_url, my_name):
         # Get DH parameters from server
         response = requests.post(server_url, 
             json={'action': 'get_server_public_key'}, 
-            timeout=10)
+            timeout=30)
         
         if response.status_code != 200:
             print("Gagal mendapat server public key")
@@ -164,7 +164,7 @@ def perform_key_exchange(server_url, my_name):
                 'client_name': my_name,
                 'client_public_key': str(client_public_key)
             },
-            timeout=10)
+            timeout=30)
         
         if response.status_code != 200:
             print("Gagal mengirim public key")
@@ -288,7 +288,7 @@ def listen_for_messages(server_url, my_name):
                     'action': 'get_messages',
                     'client_name': my_name
                 }, 
-                timeout=5)
+                timeout=30)
             
             if response.status_code == 200:
                 data = response.json()
@@ -326,7 +326,7 @@ def main():
     
     # Join chat room
     try:
-        response = requests.post(server_url, json={'action': 'join'}, timeout=10)
+        response = requests.post(server_url, json={'action': 'join'}, timeout=30)
         if response.status_code == 200:
             data = response.json()
             my_name = data['client_name']
@@ -369,7 +369,7 @@ def main():
                         'message': encrypted_message,
                         'client_name': my_name
                     }, 
-                    timeout=10)
+                    timeout=30)
                 
                 if response.status_code == 200:
                     result = response.json()
@@ -386,7 +386,7 @@ def main():
                 print(f"Error: {e}")
                 
     except KeyboardInterrupt:
-        requests.post(server_url, json={'action': 'quit', 'client_name': my_name}, timeout=5)
+        requests.post(server_url, json={'action': 'quit', 'client_name': my_name}, timeout=30)
         print(f"\n{my_name} keluar")
 
 if __name__ == "__main__":
