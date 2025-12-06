@@ -8,220 +8,198 @@
 | Nama | NRP |
 |------|-----|
 | Muhammad Danis Hadriansyah | 5025221239 |
-| Fathurazka Gamma Syuhada | 5025221128 |
+| Fathurazka Gamma Syuhada | 5025231246 |
 
 ## Deskripsi
 
-Implementasi sistem chat terenkripsi menggunakan **Diffie-Hellman Key Exchange** untuk distribusi secret key DES secara aman. Kedua pihak tidak perlu mengetahui secret key sebelumnya - key di-generate otomatis melalui protokol DH.
+Sistem chat sederhana dengan kriptografi hybrid: **RSA** untuk mendistribusikan kunci simetris, dan **DES** untuk mengenkripsi pesan chat. RSA hanya dipakai saat key exchange; seluruh pesan setelahnya dienkripsi dengan DES.
 
-## Cara Kerja Sistem
+## Cara Kerja (ringkas)
 
-### 1. Diffie-Hellman Key Exchange
-
-```
-Server:                 Client:
-Private: b (fixed)      Private: a (random)
-Public: B = g^b mod p   Public: A = g^a mod p
-
-Exchange → Shared Secret = g^(ab) mod p
-DES Key = SHA256(shared_secret)[:8]
-```
-
-**Parameter:**
-- Prime: 2048-bit safe prime
-- Generator: 2
-- Private key client: random (persistent di file)
-
-**Keamanan:**
-- Attacker tidak bisa hitung shared secret dari public keys (Discrete Log Problem)
-- Secret key tidak pernah dikirim via network
-
-### 2. Enkripsi DES
-
-**Implementasi:**
-- 16 rounds, 48-bit subkeys
-- 64-bit block cipher
-- Padding ke kelipatan 8 bytes
-- Base64 encoding untuk transport
-
-### 3. Chat Architecture
-
-**Server:**
-- Simpan shared secret per client
-- Terima pesan encrypted dari sender
-- Dekripsi dengan sender key
-- Re-encrypt untuk setiap recipient dengan key mereka
-- Broadcast ke semua client
-
-**Client:**
-- Persistent private key (di file)
-- Enkripsi pesan sebelum kirim
-- Dekripsi pesan yang diterima
-- Polling server setiap 2 detik
+1) **Server** membuat pasangan kunci RSA (1024-bit) saat startup.  
+2) **Client** meminta RSA public key server.  
+3) **Client** membuat kunci DES acak 8 byte (disimpan di file lokal).  
+4) Kunci DES di-enkripsi dengan RSA public key server, dikirim ke server.  
+5) Server mendekripsi memakai RSA private key, menyimpan kunci DES per `client_name`.  
+6) Chat: client mengenkripsi pesan dengan DES; server mendekripsi memakai kunci pengirim, lalu re-encrypt untuk tiap penerima dengan kunci DES mereka.  
+7) Riwayat pesan dibatasi 100 item; client polling setiap 2 detik.
 
 ## Komponen Program
 
-**http_server.py:**
-- DH key exchange endpoints
-- DES encryption/decryption
-- Chat room management (max 100 pesan)
-- Re-encryption untuk multi-client
-- Endpoints: `get_server_public_key`, `exchange_key`, `send_message`, `get_messages`, `join`, `quit`
+**http_server.py**
+- Generate RSA keypair (1024-bit) saat start.
+- Endpoint:
+  - `get_server_public_key` → kirim `(e, n)` RSA.
+  - `exchange_key` → terima DES key terenkripsi RSA; simpan per client.
+  - `join` / `quit` → registrasi nama otomatis `Client_X`.
+  - `send_message` → terima ciphertext DES, decrypt, re-encrypt ke semua penerima lain.
+  - `get_messages` → kirim pesan yang ditujukan ke client peminta.
+- Menyimpan kunci DES per client di `client_des_keys` dan buffer `recent_messages` (maks 100).
 
-**http_client.py:**
-- DH key exchange dengan server
-- DES encryption/decryption
-- Key persistence (`.client_[name]_private_key.txt`)
-- Threading untuk polling pesan
-- Chat interface
+**http_client.py**
+- Meminta public key RSA server, generate/ambil kunci DES 8 byte.
+- Enkripsi kunci DES dengan RSA, kirim ke server (`exchange_key`).
+- Enkripsi/dekripsi pesan chat memakai DES (implementasi manual tabel S-Box, dsb).
+- Polling pesan setiap 2 detik di thread terpisah.
+- Persistensi kunci: file `.client_<nama>_des_key.bin` (dibuat sekali, dipakai ulang).
 
 ## Cara Menjalankan
 
-### 1. Persiapan
+### 1) Persiapan
 
 ```bash
 pip install requests
 ```
 
-### 2. Jalankan Server
+### 2) Jalankan Server
 
 Terminal 1:
+
 ```bash
 python http_server.py
 ```
 
-Output:
+Output ringkas yang terlihat:
+
 ```
-==================================================
-SECURE CHAT SERVER (Diffie-Hellman + DES)
-==================================================
+============================================================
+SECURE CHAT SERVER (RSA + DES)
+============================================================
 Port: 65432
-Server Public Key: 1234567890...
-==================================================
+RSA Public Key (e): 65537
+RSA Public Key (n): <n dipotong>
+Server siap menerima koneksi...
 ```
 
-### 3. Jalankan Client
+### 3) Jalankan Client
 
 Terminal 2:
+
 ```bash
 python http_client.py
 ```
 
-Input:
-```
-Server URL: localhost:65432
-```
-
-Output:
-```
-Bergabung sebagai: Client_1
-
-=== DIFFIE-HELLMAN KEY EXCHANGE ===
-Menerima parameter DH dari server
-Generate private key baru (disimpan)
-Key exchange dengan server berhasil
-DES Key: a1b2c3d4e5f6a7b8
-========================================
-
-Chat aktif! Ketik 'quit' untuk keluar
-
->>> 
-```
-
-### 4. Client Kedua (Opsional)
-
-Terminal 3:
-```bash
-python http_client.py
-# Input: localhost:65432
-```
-
-### 5. Mulai Chat
-
-**Client_1:**
-```
->>> Halo!
-```
-
-**Client_2 menerima:**
-```
-Client_1: Halo!
->>> 
-```
-
-**Client_2 balas:**
-```
->>> Halo juga!
-```
-
-### 6. Keluar
+Input saat diminta URL:
 
 ```
->>> quit
-Client_1 keluar dari chat
+Masukkan Server URL: http://localhost:65432
 ```
 
-## Fitur Khusus
+Alur yang terjadi di client:
+- Join: otomatis mendapat nama `Client_X`.
+- RSA key exchange: ambil public key, generate/ambil DES key (persisten), enkripsi DES key dengan RSA, kirim ke server.
+- Mulai chat: ketik pesan biasa; ketik `quit` untuk keluar.
 
-### Key Persistence
+### 4) Client lain (opsional)
 
-Private key disimpan di file `.client_[name]_private_key.txt`:
-- Rejoin menggunakan key yang sama
-- Shared secret tetap konsisten
-- Tidak perlu re-exchange setiap restart
+Jalankan perintah yang sama di terminal berbeda, masukkan URL server yang sama. Tiap client mendapat kunci DES unik.
 
-### Message Clearing
+## Alur Pesan
 
-Saat client rejoin:
-- Pesan lama untuk client tersebut otomatis dihapus
-- Hindari dekripsi gagal (key mismatch)
-- Client mulai dengan history bersih
+1) Pengirim mengenkripsi plaintext dengan DES → ciphertext dikirim ke server.  
+2) Server mendekripsi ciphertext dengan kunci DES pengirim.  
+3) Server mengenkripsi ulang plaintext untuk tiap penerima dengan kunci DES mereka.  
+4) Penerima mem-poll `get_messages`, lalu mendekripsi ciphertext dengan kunci DES miliknya.
 
-### Re-encryption
+## Cuplikan Kode RSA & DES
 
-Server otomatis re-encrypt pesan:
-- Dekripsi dengan key sender
-- Re-encrypt untuk setiap recipient dengan key mereka
-- Setiap client punya DES key unik
+**Server (http_server.py)**
+
+Generate keypair saat start:
+```python
+server_public_key, server_private_key = generate_rsa_keypair(1024)
+```
+
+Kirim public key:
+```python
+elif action == 'get_server_public_key':
+  e, n = server_public_key
+  response = {'status': 'success', 'e': str(e), 'n': str(n)}
+```
+
+Terima DES key terenkripsi RSA, decrypt, simpan per client:
+```python
+elif action == 'exchange_key':
+  client_name = data.get('client_name', 'Unknown')
+  encrypted_des_key = int(data.get('encrypted_des_key'))
+  des_key_int = rsa_decrypt(encrypted_des_key, server_private_key)
+  des_key = des_key_int.to_bytes(8, 'big')
+  client_des_keys[client_name] = des_key
+```
+
+Terima pesan terenkripsi DES, decrypt, re-encrypt untuk penerima lain:
+```python
+elif action == 'send_message':
+  encrypted_msg = data['message']
+  client_name = data.get('client_name', 'Unknown')
+  sender_key = client_des_keys[client_name]
+  plaintext = decrypt_message(encrypted_msg, sender_key)
+  for recipient_name, recipient_key in client_des_keys.items():
+    if recipient_name != client_name:
+      re_encrypted = encrypt_message(plaintext, recipient_key)
+      recent_messages.append({
+        'message': re_encrypted,
+        'sender': client_name,
+        'recipient': recipient_name,
+        'timestamp': time.time()
+      })
+```
+
+**Client (http_client.py)**
+
+Minta public key, buat/baca kunci DES 8-byte, enkripsi dengan RSA, kirim ke server:
+```python
+def perform_key_exchange(server_url, my_name):
+  data = requests.post(server_url, json={'action': 'get_server_public_key'}).json()
+  e, n = int(data['e']), int(data['n'])
+  server_public_key = (e, n)
+
+  # load/generate DES key 8-byte
+  SHARED_DES_KEY = secrets.token_bytes(8)  # atau load dari file
+
+  des_key_int = int.from_bytes(SHARED_DES_KEY, 'big')
+  encrypted_des_key = rsa_encrypt(des_key_int, server_public_key)
+
+  requests.post(server_url, json={
+    'action': 'exchange_key',
+    'client_name': my_name,
+    'encrypted_des_key': str(encrypted_des_key)
+  })
+```
+
+Enkripsi pesan chat dengan DES sebelum kirim:
+```python
+encrypted_message = encrypt_message(message)
+requests.post(server_url, json={
+  'action': 'send_message',
+  'message': encrypted_message,
+  'client_name': my_name
+})
+```
+
+Terima pesan yang sudah di-re-encrypt server, decrypt dengan kunci DES sendiri:
+```python
+def listen_for_messages(server_url, my_name):
+  data = requests.post(server_url, json={
+    'action': 'get_messages',
+    'client_name': my_name
+  }).json()
+  for msg in data['messages']:
+    decrypted = decrypt_message(msg['message'])
+    print(f"{msg['sender']}: {decrypted}")
+```
 
 ## Troubleshooting
 
-**Connection reset saat rejoin:**
-- Sudah diperbaiki: server retain key saat client quit
-- Pesan lama di-clear otomatis saat rejoin
+- **Key mismatch / pesan garbled**: hapus file `.client_*_des_key.bin`, lalu jalankan client lagi untuk regenerasi kunci.
+- **Timeout/koneksi gagal**: pastikan server jalan di port 65432, cek firewall, coba `http://localhost:65432` di mesin yang sama.
+- **Pesan tidak muncul**: pastikan kedua client sudah sukses key exchange (lihat log server ada `[KEY] <client>: received DES key ...`).
 
-**Pesan jadi sampah (garbled text):**
-- Sudah diperbaiki: pesan lama dihapus saat key exchange
-- Tidak ada lagi pesan terenkripsi dengan key lama
+## Catatan Keamanan
 
-**Key mismatch:**
-- Hapus file `.client_*_private_key.txt`
-- Restart client untuk generate key baru
-
-**Server tidak bisa diakses:**
-- Pastikan port 65432 tidak dipakai
-- Cek firewall
-- Gunakan LocalTunnel untuk akses eksternal:
-  ```bash
-  npm install -g localtunnel
-  lt --port 65432
-  ```
-
-## Algoritma & Keamanan
-
-| Komponen | Detail |
-|----------|--------|
-| Key Exchange | Diffie-Hellman 2048-bit |
-| Encryption | DES 56-bit |
-| Key Derivation | SHA-256 |
-| Encoding | Base64 |
-| Transport | HTTP POST JSON |
-
-**Catatan Keamanan:**
-- Implementasi edukatif untuk memahami konsep
-- Untuk production gunakan AES-256 (bukan DES)
-- Tambahkan authentication (digital signature)
-- Gunakan HTTPS (bukan HTTP)
+- RSA 1024-bit dan DES 56-bit hanya untuk tujuan edukasi; tidak aman untuk produksi.
+- Gunakan HTTPS untuk melindungi transport; tambahkan autentikasi/ tanda tangan digital jika dipakai serius.
+- Untuk praktik nyata: ganti DES dengan AES-256 dan gunakan RSA 2048/3072 atau ECDH/ECDSA.
 
 ---
 
