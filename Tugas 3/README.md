@@ -8,7 +8,7 @@
 | Nama | NRP |
 |------|-----|
 | Muhammad Danis Hadriansyah | 5025221239 |
-| Fathurazka Gamma Syuhada | 5025231246 |
+| Fathurazka Gamma Syuhada | 5025221128 |
 
 ## Deskripsi
 
