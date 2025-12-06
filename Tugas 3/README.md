@@ -103,90 +103,206 @@ Jalankan perintah yang sama di terminal berbeda, masukkan URL server yang sama. 
 
 ## Cuplikan Kode RSA & DES
 
-**Server (http_server.py)**
+### Server (http_server.py)
 
-Generate keypair saat start:
+**1. Generate RSA keypair saat start:**
 ```python
+def generate_rsa_keypair(bits=1024):
+    p = generate_prime(bits // 2)
+    q = generate_prime(bits // 2)
+    n = p * q
+    phi = (p - 1) * (q - 1)
+    e = 65537
+    while gcd(e, phi) != 1:
+        e = secrets.randbelow(phi - 2) + 2
+    d = mod_inverse(e, phi)
+    return (e, n), (d, n)
+
+# Generate keypair
 server_public_key, server_private_key = generate_rsa_keypair(1024)
 ```
 
-Kirim public key:
+**2. Kirim public key ke client:**
 ```python
-elif action == 'get_server_public_key':
-  e, n = server_public_key
-  response = {'status': 'success', 'e': str(e), 'n': str(n)}
+if action == 'get_server_public_key':
+    e, n = server_public_key
+    response = {
+        'status': 'success',
+        'e': str(e),
+        'n': str(n)
+    }
 ```
 
-Terima DES key terenkripsi RSA, decrypt, simpan per client:
+**3. Terima DES key terenkripsi RSA, decrypt, simpan:**
 ```python
 elif action == 'exchange_key':
-  client_name = data.get('client_name', 'Unknown')
-  encrypted_des_key = int(data.get('encrypted_des_key'))
-  des_key_int = rsa_decrypt(encrypted_des_key, server_private_key)
-  des_key = des_key_int.to_bytes(8, 'big')
-  client_des_keys[client_name] = des_key
+    client_name = data.get('client_name', 'Unknown')
+    encrypted_des_key = int(data.get('encrypted_des_key'))
+    
+    # Decrypt the DES key using server's private key
+    des_key_int = rsa_decrypt(encrypted_des_key, server_private_key)
+    
+    # Convert integer back to 8-byte key
+    des_key = des_key_int.to_bytes(8, 'big')
+    
+    client_des_keys[client_name] = des_key
+    print(f"[KEY] {client_name}: received DES key {des_key.hex()}")
+    
+    # Clear old messages for this client
+    recent_messages[:] = [msg for msg in recent_messages 
+                         if msg.get('recipient') != client_name]
 ```
 
-Terima pesan terenkripsi DES, decrypt, re-encrypt untuk penerima lain:
+**4. Terima pesan, decrypt dengan kunci pengirim, re-encrypt untuk setiap penerima:**
 ```python
 elif action == 'send_message':
-  encrypted_msg = data['message']
-  client_name = data.get('client_name', 'Unknown')
-  sender_key = client_des_keys[client_name]
-  plaintext = decrypt_message(encrypted_msg, sender_key)
-  for recipient_name, recipient_key in client_des_keys.items():
-    if recipient_name != client_name:
-      re_encrypted = encrypt_message(plaintext, recipient_key)
-      recent_messages.append({
-        'message': re_encrypted,
-        'sender': client_name,
-        'recipient': recipient_name,
-        'timestamp': time.time()
-      })
+    encrypted_msg = data['message']
+    client_name = data.get('client_name', 'Unknown')
+    
+    if client_name in client_des_keys:
+        sender_key = client_des_keys[client_name]
+        plaintext = decrypt_message(encrypted_msg, sender_key)
+        print(f"[CHAT] {client_name}: {plaintext}")
+        
+        # Re-encrypt for each recipient with their own key
+        for recipient_name, recipient_key in client_des_keys.items():
+            if recipient_name != client_name:
+                re_encrypted = encrypt_message(plaintext, recipient_key)
+                message_data = {
+                    'message': re_encrypted,
+                    'sender': client_name,
+                    'recipient': recipient_name,
+                    'timestamp': time.time()
+                }
+                recent_messages.append(message_data)
 ```
 
-**Client (http_client.py)**
+**5. Fungsi DES enkripsi/dekripsi di server:**
+```python
+def encrypt_message(message, key):
+    subkeys = generate_subkeys(key)
+    padded_message = message.ljust((len(message) + 7) // 8 * 8, '\x00')
+    encrypted_blocks = []
+    for i in range(0, len(padded_message), 8):
+        block = padded_message[i:i+8]
+        block_bin = string_to_binary(block)
+        encrypted_block = des_encrypt_block(block_bin, subkeys)
+        encrypted_blocks.append(binary_to_string(encrypted_block))
+    encrypted_message = ''.join(encrypted_blocks)
+    return base64.b64encode(encrypted_message.encode('latin-1')).decode('utf-8')
+```
 
-Minta public key, buat/baca kunci DES 8-byte, enkripsi dengan RSA, kirim ke server:
+### Client (http_client.py)
+
+**1. RSA encrypt function:**
+```python
+def rsa_encrypt(message, public_key):
+    e, n = public_key
+    return pow(message, e, n)
+```
+
+**2. Key exchange dengan server:**
 ```python
 def perform_key_exchange(server_url, my_name):
-  data = requests.post(server_url, json={'action': 'get_server_public_key'}).json()
-  e, n = int(data['e']), int(data['n'])
-  server_public_key = (e, n)
-
-  # load/generate DES key 8-byte
-  SHARED_DES_KEY = secrets.token_bytes(8)  # atau load dari file
-
-  des_key_int = int.from_bytes(SHARED_DES_KEY, 'big')
-  encrypted_des_key = rsa_encrypt(des_key_int, server_public_key)
-
-  requests.post(server_url, json={
-    'action': 'exchange_key',
-    'client_name': my_name,
-    'encrypted_des_key': str(encrypted_des_key)
-  })
+    global SHARED_DES_KEY
+    
+    # Get server's public key
+    response = requests.post(server_url, 
+        json={'action': 'get_server_public_key'}, 
+        timeout=30)
+    
+    data = response.json()
+    e = int(data['e'])
+    n = int(data['n'])
+    server_public_key = (e, n)
+    
+    print("Menerima RSA public key dari server")
+    
+    # Load or generate DES key
+    key_file = f'.client_{my_name}_des_key.bin'
+    if os.path.exists(key_file):
+        with open(key_file, 'rb') as f:
+            SHARED_DES_KEY = f.read()
+        print(f"Load DES key dari file (persistent)")
+    else:
+        # Generate random 8-byte DES key
+        SHARED_DES_KEY = secrets.token_bytes(8)
+        with open(key_file, 'wb') as f:
+            f.write(SHARED_DES_KEY)
+        print(f"Generate DES key baru (disimpan)")
+    
+    print(f"DES Key: {SHARED_DES_KEY.hex()}")
+    
+    # Convert DES key to integer for RSA encryption
+    des_key_int = int.from_bytes(SHARED_DES_KEY, 'big')
+    
+    # Encrypt DES key with server's RSA public key
+    encrypted_des_key = rsa_encrypt(des_key_int, server_public_key)
+    
+    # Send encrypted DES key to server
+    response = requests.post(server_url,
+        json={
+            'action': 'exchange_key',
+            'client_name': my_name,
+            'encrypted_des_key': str(encrypted_des_key)
+        },
+        timeout=30)
 ```
 
-Enkripsi pesan chat dengan DES sebelum kirim:
+**3. Enkripsi pesan dengan DES sebelum kirim:**
 ```python
+def encrypt_message(message):
+    subkeys = generate_subkeys(SHARED_DES_KEY)
+    padded_message = message.ljust((len(message) + 7) // 8 * 8, '\x00')
+    encrypted_blocks = []
+    for i in range(0, len(padded_message), 8):
+        block = padded_message[i:i+8]
+        block_bin = string_to_binary(block)
+        encrypted_block = des_encrypt_block(block_bin, subkeys)
+        encrypted_blocks.append(binary_to_string(encrypted_block))
+    encrypted_message = ''.join(encrypted_blocks)
+    return base64.b64encode(encrypted_message.encode('latin-1')).decode('utf-8')
+
+# Kirim pesan
 encrypted_message = encrypt_message(message)
-requests.post(server_url, json={
-  'action': 'send_message',
-  'message': encrypted_message,
-  'client_name': my_name
-})
+response = requests.post(server_url, 
+    json={
+        'action': 'send_message',
+        'message': encrypted_message,
+        'client_name': my_name
+    }, 
+    timeout=30)
 ```
 
-Terima pesan yang sudah di-re-encrypt server, decrypt dengan kunci DES sendiri:
+**4. Terima dan dekripsi pesan:**
 ```python
 def listen_for_messages(server_url, my_name):
-  data = requests.post(server_url, json={
-    'action': 'get_messages',
-    'client_name': my_name
-  }).json()
-  for msg in data['messages']:
-    decrypted = decrypt_message(msg['message'])
-    print(f"{msg['sender']}: {decrypted}")
+    last_message_count = 0
+    
+    while True:
+        response = requests.post(server_url, 
+            json={
+                'action': 'get_messages',
+                'client_name': my_name
+            }, 
+            timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data['status'] == 'success' and data['messages']:
+                new_messages = data['messages'][last_message_count:]
+                for msg in new_messages:
+                    sender = msg['sender']
+                    encrypted_msg = msg['message']
+                    try:
+                        decrypted_msg = decrypt_message(encrypted_msg)
+                        print(f"\n{sender}: {decrypted_msg}")
+                    except:
+                        print(f"\n{sender}: [dekripsi gagal]")
+                
+                last_message_count = len(data['messages'])
+        
+        time.sleep(2)
 ```
 
 ## Troubleshooting
